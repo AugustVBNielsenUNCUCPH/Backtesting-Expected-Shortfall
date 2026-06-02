@@ -162,7 +162,7 @@ pheatmap(
 ```
 
 ```{r fig.width = 12, fig.height = 6, dpi = 300}
-# Linjeplot til appendiks, samme stil som figurerne i Heatmaps_og_styrke_plots.rmd
+# Linjeplot
 plot(H1_seq,
      lwd = 2,
      ylim = c(0, 1),
@@ -189,7 +189,7 @@ lines(H1_seq, power_matrix_7_3[, "CC"],  col = "darkgreen",      lwd = 3)
 # DS-komponenter (stiplede)
 lines(H1_seq, power_matrix_7_3[, "T_F"], col = "deeppink", lwd = 3, lty = 2)
 lines(H1_seq, power_matrix_7_3[, "T_S"], col = "darkcyan",  lwd = 3, lty = 2)
-lines(H1_seq, power_T_G,                 col = "grey20",    lwd = 3, lty = 2)
+lines(H1_seq, power_matrix_7_3[, "T_G"],  col = "grey20",    lwd = 3, lty = 2)
 
 abline(h = signifikansniveau, col = "grey40", lwd = 2, lty = 3)
 
@@ -214,3 +214,4 @@ legend("right",
        lwd = 3,
        bty = "n")
 ```
+
