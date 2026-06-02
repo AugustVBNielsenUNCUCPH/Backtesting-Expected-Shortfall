@@ -1,0 +1,176 @@
+---
+title: "Kritiske værdier ved Z2, Z3 & CC under GARCH-misspecifikationer"
+output: html_document
+date: "`2026-05-28"
+---
+
+```{r stabilitet_Z2_Z3_CC_GARCH}
+# Empiriske kritiske 5%-værdier for Z2, Z3, CC1 og CC2 under de fire misspecifikationer
+set.seed(123)
+
+# Estimerede GARCH(1,1) parametre fra Tabel 5
+omega_l <- 7.63e-6; alpha_l <- 0.188; beta_l <- 0.696; nu_l <- 8.819
+omega_h <- 9.08e-7; alpha_h <- 0.063; beta_h <- 0.930; nu_h <- 17.478
+
+# Setup
+T <- 250
+burn_in <- 500
+M <- 100000
+alpha <- 0.025
+niveau <- 0.05
+
+# GARCH(1,1) simulationsfunktion
+simulate_garch <- function(T, omega, alpha, beta, nu, burn_in, M) {
+  
+  total <- T + burn_in
+  tau <- sqrt((nu - 2) / nu)
+  
+  X <- matrix(0, M, total)
+  sigma2 <- matrix(0, M, total)
+  
+  sigma2[,1] <- omega / (1 - alpha - beta)
+  
+  for (t in 2:total) {
+    
+    z <- rt(M, df = nu) * tau
+    
+    X[,t-1] <- sqrt(sigma2[,t-1]) * z
+    
+    sigma2[,t] <- omega +
+                  alpha * X[,t-1]^2 +
+                  beta  * sigma2[,t-1]
+  }
+  
+  X <- X[, (burn_in+1):total]
+  sigma <- sqrt(sigma2[, (burn_in+1):total])
+  
+  list(X = X, sigma = sigma)
+}
+
+# VaR OG ES
+VaR_GARCH_stdt <- function(sigma, alpha, nu) {
+  -sigma * qt(alpha, nu) * sqrt((nu - 2)/nu)
+}
+
+ES_GARCH_stdt <- function(sigma, alpha, nu) {
+  q <- qt(alpha, nu)
+  sigma * sqrt((nu - 2)/nu) *
+    (dt(q, nu)/alpha) *
+    (nu + q^2)/(nu - 1)
+}
+
+## Z2 
+Z2_test_GARCH <- function(X, VaR, ES, alpha){
+  
+  I <- (X + VaR < 0)
+  
+  rowMeans((X * I) / (alpha * ES)) + 1}
+
+## Z3
+Z3_test_GARCH <- function(X, sigma, alpha, nu){
+  
+  T <- ncol(X)
+  
+  z <- X / sigma
+  U <- pt(z * sqrt(nu/(nu-2)), df = nu)
+  U <- pmin(pmax(U, 1e-10), 1-1e-10)
+  U_sorted <- t(apply(U, 1, sort, method = "quick"))
+  q <- qt(U_sorted, df = nu)
+  
+  k <- floor(T * alpha)
+  ES_emp <- -rowMeans(q[, 1:k, drop = FALSE])
+  
+  q_alpha <- qt(alpha, nu)
+  ES_theo <- (dt(q_alpha, nu)/alpha) * (nu + q_alpha^2)/(nu - 1)
+  
+  Z3 <- 1 - (ES_emp / ES_theo)}
+
+## CC test
+CC_test_GARCH <- function(X, VaR, ES, alpha){
+
+  M <- nrow(X)
+  T <- ncol(X)
+
+  T_CC <- matrix(0, M, 2)
+
+  for(i in 1:M){
+
+    xt <- X[i,]
+    r1 <- VaR[i,]
+    r2 <- ES[i,]
+
+    V <- cbind(
+      alpha - (xt + r1 < 0)*1,
+      r1 - r2 - (1/alpha)*(xt + r1 < 0)*(r1 + xt)
+    )
+
+    Omega <- crossprod(V)/T
+    # Teststørrelse
+    T_CC[i,] <- sqrt(T)*diag(Omega)^(-1/2)*colMeans(V)}
+  T_CC}
+
+# Kritiske 5%-værdier for ét parametersæt (CC1 i nedre hale, CC2 i øvre)
+crit_vals <- function(omega, alpha_garch, beta, nu) {
+  sim <- simulate_garch(T, omega, alpha_garch, beta, nu, burn_in, M)
+  VaR <- VaR_GARCH_stdt(sim$sigma, alpha, nu)
+  ES  <- ES_GARCH_stdt(sim$sigma, alpha, nu)
+  Z2  <- Z2_test_GARCH(sim$X, VaR, ES, alpha)
+  Z3  <- Z3_test_GARCH(sim$X, sim$sigma, alpha, nu)
+  CC  <- CC_test_GARCH(sim$X, VaR, ES, alpha)
+  c(Z2  = unname(quantile(Z2,     niveau)),
+    Z3  = unname(quantile(Z3,     niveau)),
+    CC1 = unname(quantile(CC[, 1], niveau)),
+    CC2 = unname(quantile(CC[, 2], 1 - niveau)))
+}
+
+# Samler alle rækker for ét regime i tabellens rækkefølge
+byg_regime <- function(omega0, alpha0, beta0, nu0) {
+  persist   <- alpha0 + beta0
+  sigma2bar <- omega0 / (1 - persist)
+
+  rk <- function(case, variation, label, cv) data.frame(
+    Case = case, Variation = variation, Misspecifikation = label,
+    Z2 = cv["Z2"], Z3 = cv["Z3"], CC1 = cv["CC1"], CC2 = cv["CC2"],
+    row.names = NULL)
+
+  res <- rbind(
+    rk("Case 1", "", "omega_hat/2",   crit_vals(0.5 * omega0, alpha0, beta0, nu0)),
+    rk("Case 1", "", "omega_hat",     crit_vals(omega0,       alpha0, beta0, nu0)),
+    rk("Case 1", "", "3.5*omega_hat", crit_vals(3.5 * omega0, alpha0, beta0, nu0))
+  )
+
+  for (p in c(0.75, 0.99)) {
+    k <- p / persist
+    res <- rbind(res, rk("Case 2", "Fast omega", paste0("a+b=", p),
+                         crit_vals(omega0, k * alpha0, k * beta0, nu0)))
+  }
+  for (p in c(0.75, 0.99)) {
+    k <- p / persist
+    res <- rbind(res, rk("Case 2", "Fast E[sigma^2]", paste0("a+b=", p),
+                         crit_vals(sigma2bar * (1 - p), k * alpha0, k * beta0, nu0)))
+  }
+  for (fac in c(0.25, 1, 2)) {
+    a_alt <- fac * alpha0
+    res <- rbind(res, rk("Case 3", "", paste0(fac, "*alpha_hat"),
+                         crit_vals(omega0, a_alt, persist - a_alt, nu0)))
+  }
+  for (nuv in c(3, 5, 10, 100)) {
+    res <- rbind(res, rk("Frihedsgrader", "", paste0("nu=", nuv),
+                         crit_vals(omega0, alpha0, beta0, nuv)))
+  }
+  res
+}
+
+set.seed(123); res_low  <- byg_regime(omega_l, alpha_l, beta_l, nu_l)
+set.seed(123); res_high <- byg_regime(omega_h, alpha_h, beta_h, nu_h)
+
+tabel <- data.frame(
+  Case = res_low$Case, Variation = res_low$Variation, Misspecifikation = res_low$Misspecifikation,
+  Z2_lav  = round(res_low$Z2,  2), Z3_lav  = round(res_low$Z3,  2),
+  CC1_lav = round(res_low$CC1, 2), CC2_lav = round(res_low$CC2, 2),
+  Z2_hoj  = round(res_high$Z2, 2), Z3_hoj  = round(res_high$Z3, 2),
+  CC1_hoj = round(res_high$CC1, 2), CC2_hoj = round(res_high$CC2, 2)
+)
+
+print(tabel, row.names = FALSE)
+```
