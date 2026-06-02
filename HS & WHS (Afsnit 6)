@@ -1,0 +1,538 @@
+---
+title: "Historisk Simulation vs. GARCH"
+output: html_document
+date: "2026-05-18"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(gridExtra)
+```
+
+```{r parametre}
+# GARCH(1,1) parametre fra Tabel 5
+omega_h <- 9.08e-7; alpha_h <- 0.063; beta_h <- 0.930; nu_h <- 17.478
+omega_l <- 7.63e-6; alpha_l <- 0.188; beta_l <- 0.696; nu_l <- 8.819
+
+# Setup
+n       <- 500
+burn_in <- 500
+w       <- 250
+alpha   <- 0.025
+v       <- 0.99
+
+# Monte Carlo-setup til tabeller og tæthedsplots
+M      <- 10000
+T_test <- 250
+m_seq  <- c(125, 250, 500, 1000)
+```
+
+```{r funktioner}
+# GARCH(1,1) simulation, én sti
+simulate_garch <- function(n, omega, alpha1, beta1, nu, burn_in) {
+  total   <- n + burn_in
+  tau     <- sqrt((nu - 2) / nu)
+  X       <- numeric(total)
+  sig2    <- numeric(total)
+  sig2[1] <- omega / (1 - alpha1 - beta1)
+  for (t in 2:total) {
+    z       <- rt(1, df = nu) * tau
+    X[t-1]  <- sqrt(sig2[t-1]) * z
+    sig2[t] <- omega + alpha1 * X[t-1]^2 + beta1 * sig2[t-1]
+  }
+  list(X = X[(burn_in+1):(burn_in+n)], sigma = sqrt(sig2[(burn_in+1):(burn_in+n)]))
+}
+
+# GARCH(1,1) simulation, M stier
+simulate_garch_matrix <- function(n, omega, alpha1, beta1, nu, burn_in, M) {
+  total     <- n + burn_in
+  tau       <- sqrt((nu - 2) / nu)
+  X         <- matrix(0, M, total)
+  sig2      <- matrix(0, M, total)
+  sig2[, 1] <- omega / (1 - alpha1 - beta1)
+  for (t in 2:total) {
+    z         <- rt(M, df = nu) * tau
+    X[, t-1]  <- sqrt(sig2[, t-1]) * z
+    sig2[, t] <- omega + alpha1 * X[, t-1]^2 + beta1 * sig2[, t-1]
+  }
+  list(X = X[, (burn_in+1):(burn_in+n)], sigma = sqrt(sig2[, (burn_in+1):(burn_in+n)]))
+}
+
+# Parametrisk VaR og ES under standardiseret t
+VaR_GARCH_stdt <- function(sigma, alpha, nu) {
+  -sigma * qt(alpha, nu) * sqrt((nu - 2) / nu)
+}
+
+ES_GARCH_stdt <- function(sigma, alpha, nu) {
+  q <- qt(alpha, nu)
+  sigma * sqrt((nu - 2) / nu) * (dt(q, nu) / alpha) * (nu + q^2) / (nu - 1)
+}
+
+# Historisk simulation med lineær interpolation, én sti
+HS_estimation <- function(X, alpha, w) {
+  n      <- length(X)
+  VaR_hs <- rep(NA, n)
+  ES_hs  <- rep(NA, n)
+  for (i in (w+1):n) {
+    window    <- sort(X[(i-w):(i-1)])
+    cap       <- w * alpha
+    vaegt     <- cap - floor(cap)
+    VaR_hs[i] <- -((1 - vaegt) * window[floor(cap)] + vaegt * window[floor(cap) + 1])
+    ES_hs[i]  <- -(sum(window[1:floor(cap)]) + vaegt * window[floor(cap) + 1]) / cap
+  }
+  list(VaR = VaR_hs, ES = ES_hs)
+}
+
+# Vægtet historisk simulation, én sti
+WHS_estimation <- function(X, alpha, w, v = 0.99) {
+  n       <- length(X)
+  VaR_whs <- rep(NA, n)
+  ES_whs  <- rep(NA, n)
+  for (i in (w+1):n) {
+    window    <- X[(i-w):(i-1)]
+    v_i       <- v^((w-1):0) * (1 - v) / (1 - v^w)
+    orden     <- order(window)
+    sorted_X  <- window[orden]
+    sorted_vi <- v_i[orden]
+    V         <- cumsum(sorted_vi)
+    k         <- which(V >= alpha)[1]
+    if (k == 1) {
+      VaR_whs[i] <- -sorted_X[1]
+      ES_whs[i]  <- -sorted_X[1]
+    } else {
+      VaR_whs[i] <- -(sorted_X[k-1] + (alpha - V[k-1]) / (V[k] - V[k-1]) * (sorted_X[k] - sorted_X[k-1]))
+      ES_whs[i]  <- -1/alpha * (sum(sorted_X[1:(k-1)] * sorted_vi[1:(k-1)]) + sorted_X[k] * (alpha - V[k-1]))
+    }
+  }
+  list(VaR = VaR_whs, ES = ES_whs)
+}
+
+# Historisk simulation, M stier
+HS_matrix <- function(X, alpha, w) {
+  M      <- nrow(X)
+  n      <- ncol(X)
+  VaR_hs <- matrix(NA, M, n)
+  ES_hs  <- matrix(NA, M, n)
+  cap    <- w * alpha
+  vaegt  <- cap - floor(cap)
+  for (i in (w+1):n) {
+    sorted      <- apply(X[, (i-w):(i-1)], 1, sort)
+    VaR_hs[, i] <- -((1 - vaegt) * sorted[floor(cap), ] + vaegt * sorted[floor(cap)+1, ])
+    ES_hs[, i]  <- -(colSums(sorted[1:floor(cap), , drop = FALSE]) + vaegt * sorted[floor(cap)+1, ]) / cap
+  }
+  list(VaR = VaR_hs, ES = ES_hs)
+}
+
+# Vægtet historisk simulation, M stier
+WHS_matrix <- function(X, alpha, w, v = 0.99) {
+  M        <- nrow(X)
+  n        <- ncol(X)
+  VaR_whs  <- matrix(NA, M, n)
+  ES_whs   <- matrix(NA, M, n)
+  v_i_base <- v^((w-1):0) * (1 - v) / (1 - v^w)
+  for (i in (w+1):n) {
+    window     <- X[, (i-w):(i-1)]
+    sorted_idx <- t(apply(window, 1, order))
+    sorted_X   <- t(apply(window, 1, sort))
+    sorted_vi  <- matrix(v_i_base[sorted_idx], nrow = M)
+    V_cum      <- t(apply(sorted_vi, 1, cumsum))
+    k_vec      <- max.col(V_cum >= alpha, ties.method = "first")
+
+    k0   <- pmax(k_vec - 1, 1)
+    V_k0 <- V_cum[cbind(seq_len(M), k0)]
+    V_k  <- V_cum[cbind(seq_len(M), k_vec)]
+    X_k0 <- sorted_X[cbind(seq_len(M), k0)]
+    X_k  <- sorted_X[cbind(seq_len(M), k_vec)]
+
+    VaR_whs[, i] <- ifelse(k_vec == 1, -sorted_X[, 1],
+                           -(X_k0 + (alpha - V_k0) / (V_k - V_k0) * (X_k - X_k0)))
+    ES_whs[, i]  <- ifelse(k_vec == 1, -sorted_X[, 1],
+                           -1/alpha * (rowSums(sorted_X * sorted_vi * (col(sorted_X) < k_vec)) +
+                                       X_k * (alpha - ifelse(k_vec > 1, V_cum[cbind(seq_len(M), k_vec-1)], 0))))
+  }
+  list(VaR = VaR_whs, ES = ES_whs)
+}
+
+# Z2-teststørrelse
+Z2_test <- function(X, VaR, ES, alpha) {
+  I <- (X + VaR < 0)
+  rowMeans((X * I) / (alpha * ES)) + 1
+}
+
+# VaR-overskridelser pr. sti
+VaR_stat <- function(X, VaR) {
+  rowSums(X + VaR < 0)
+}
+
+# Exceedance Residuals, uden sigma-skalering (HS/WHS har ingen modelvolatilitet)
+ER_test <- function(X, VaR, ES) {
+  rowMeans(ifelse(X + VaR < 0, X + ES, NA), na.rm = TRUE)
+}
+
+# CC-teststørrelse, M stier. h_t = I, så Z = V. Returnerer M x 2 matrix.
+cc_matrix <- function(X, VaR, ES, alpha) {
+  Tn  <- ncol(X)
+  ind <- (X + VaR < 0) * 1
+  V1  <- alpha - ind
+  V2  <- VaR - ES - (1/alpha) * ind * (VaR + X)
+  cbind(sqrt(Tn) * rowMeans(V1) / sqrt(rowMeans(V1^2)),
+        sqrt(Tn) * rowMeans(V2) / sqrt(rowMeans(V2^2)))
+}
+
+# Empirisk Bonferroni-afvisning af CC. Komponent 1 i nedre hale, komponent 2 i øvre.
+cc_power <- function(CC_null, CC) {
+  p1  <- ecdf(CC_null[, 1])(CC[, 1])
+  p2  <- 1 - ecdf(CC_null[, 2])(CC[, 2])
+  eta <- pmin(2 * pmin(p1, p2), 1)
+  mean(eta < 0.0412)
+}
+
+# Monte Carlo-analyse for ét volatilitetsregime
+analyser_regime <- function(omega, alpha1, beta1, nu) {
+  set.seed(2026)
+  n_sim <- max(m_seq) + T_test
+  sim   <- simulate_garch_matrix(n_sim, omega, alpha1, beta1, nu, burn_in, M)
+  X_all <- sim$X
+  sigma <- sim$sigma
+  idx_t <- (n_sim - T_test + 1):n_sim
+  X_t   <- X_all[, idx_t]
+
+  overskr <- data.frame(); rater_hs <- data.frame(); rater_whs <- data.frame()
+  dist <- list(); est250 <- NULL
+
+  for (m in m_seq) {
+    sig_t    <- sigma[, idx_t]
+    VaR_g    <- VaR_GARCH_stdt(sig_t, alpha, nu)
+    ES_g     <- ES_GARCH_stdt( sig_t, alpha, nu)
+    VaR_g_01 <- VaR_GARCH_stdt(sig_t, 0.01, nu)
+
+    hs    <- HS_matrix( X_all, alpha, m); hs01  <- HS_matrix( X_all, 0.01, m)
+    whs   <- WHS_matrix(X_all, alpha, m, v); whs01 <- WHS_matrix(X_all, 0.01, m, v)
+    VaR_h <- hs$VaR[, idx_t];  ES_h <- hs$ES[, idx_t];  VaR_h_01 <- hs01$VaR[, idx_t]
+    VaR_w <- whs$VaR[, idx_t]; ES_w <- whs$ES[, idx_t]; VaR_w_01 <- whs01$VaR[, idx_t]
+
+    overskr <- rbind(overskr, data.frame(
+      m = m,
+      GARCH     = mean(VaR_stat(X_t, VaR_g)),
+      HS        = mean(VaR_stat(X_t, VaR_h)),
+      WHS       = mean(VaR_stat(X_t, VaR_w)),
+      Forventet = T_test * alpha))
+
+    Z2_g <- Z2_test(X_t, VaR_g, ES_g, alpha); Z2_h <- Z2_test(X_t, VaR_h, ES_h, alpha); Z2_w <- Z2_test(X_t, VaR_w, ES_w, alpha)
+    ER_g <- ER_test(X_t, VaR_g, ES_g);        ER_h <- ER_test(X_t, VaR_h, ES_h);        ER_w <- ER_test(X_t, VaR_w, ES_w)
+    n_g  <- VaR_stat(X_t, VaR_g_01);          n_h  <- VaR_stat(X_t, VaR_h_01);          n_w  <- VaR_stat(X_t, VaR_w_01)
+    CC_g <- cc_matrix(X_t, VaR_g, ES_g, alpha); CC_h <- cc_matrix(X_t, VaR_h, ES_h, alpha); CC_w <- cc_matrix(X_t, VaR_w, ES_w, alpha)
+
+    q_Z2  <- quantile(Z2_g, 0.0412, na.rm = TRUE)
+    q_ER  <- quantile(ER_g, 0.0412, na.rm = TRUE)
+    q_VaR <- qbinom(1 - 0.0412, T_test, 0.01)
+
+    rater_hs <- rbind(rater_hs, data.frame(
+      m = m, Z2 = mean(Z2_h < q_Z2), VaR = mean(n_h > q_VaR),
+      ER = mean(ER_h < q_ER, na.rm = TRUE), CC = cc_power(CC_g, CC_h)))
+    rater_whs <- rbind(rater_whs, data.frame(
+      m = m, Z2 = mean(Z2_w < q_Z2), VaR = mean(n_w > q_VaR),
+      ER = mean(ER_w < q_ER, na.rm = TRUE), CC = cc_power(CC_g, CC_w)))
+
+    dist[[as.character(m)]] <- list(
+      Z2_g = Z2_g, Z2_h = Z2_h, Z2_w = Z2_w, n_g = n_g, n_h = n_h, n_w = n_w,
+      ER_g = ER_g, ER_h = ER_h, ER_w = ER_w, CC_g = CC_g, CC_h = CC_h, CC_w = CC_w)
+
+    if (m == 250) est250 <- list(X_t = X_t, VaR_g = VaR_g, ES_g = ES_g,
+                                 VaR_h = VaR_h, ES_h = ES_h, VaR_w = VaR_w, ES_w = ES_w)
+  }
+  list(overskr = overskr, rater_hs = rater_hs, rater_whs = rater_whs, dist = dist, est250 = est250)
+}
+
+# Plot af én simuleret sti
+plot_sammenligning <- function(df, df_exc_garch, df_exc_alt, farver, title, exc_label,
+                               n_garch, n_alt, n_forventet) {
+  df_long <- pivot_longer(df, cols = -t, names_to = "Serie", values_to = "Værdi")
+  ggplot() +
+    geom_line(data = df_long %>% filter(Serie == "X"),
+              aes(x = t, y = Værdi, color = Serie), linewidth = 0.5) +
+    geom_line(data = df_long %>% filter(Serie != "X"),
+              aes(x = t, y = Værdi, color = Serie), linewidth = 0.9) +
+    geom_point(data = df_exc_garch, aes(x = t, y = y),
+               shape = 1, color = "darkgreen", size = 3.5, stroke = 1.2) +
+    geom_point(data = df_exc_alt, aes(x = t, y = y),
+               shape = 16, color = "#CD2990", size = 1.5) +
+    scale_color_manual(values = farver, breaks = names(farver)) +
+    labs(title = title, x = "Tid", y = "", color = "",
+         caption = paste0("VaR overskridelser | GARCH: ", n_garch, " | ", exc_label, ": ",
+                          n_alt, " | Forventet: ", n_forventet)) +
+    theme_minimal() + theme(legend.position = "bottom")
+}
+
+# Tæthedsplot for en teststørrelse under GARCH, HS og WHS
+farver_model <- c("GARCH" = "#1E90FF", "HS" = "#FF83FA", "WHS" = "#90EE90")
+
+plot_tæthed <- function(vals_garch, vals_hs, vals_whs, titel, xlab, qcrit = NULL, adjust = 1) {
+  df <- data.frame(
+    værdi = c(vals_garch, vals_hs, vals_whs),
+    model = rep(c("GARCH", "HS", "WHS"), c(length(vals_garch), length(vals_hs), length(vals_whs))))
+  df <- df[is.finite(df$værdi), ]
+  p <- ggplot(df, aes(x = værdi, color = model)) +
+    geom_density(linewidth = 1, fill = NA, adjust = adjust) +
+    scale_color_manual(values = farver_model) +
+    labs(title = titel, x = xlab, y = "Tæthed", color = "Model") +
+    theme_minimal() +
+    theme(legend.position = "bottom", plot.title = element_text(size = 11, hjust = 0.5),
+          axis.title = element_text(size = 9))
+  if (!is.null(qcrit)) p <- p + geom_vline(xintercept = qcrit, linetype = "dashed", linewidth = 0.7)
+  p
+}
+
+plot_histogram <- function(vals_garch, vals_hs, vals_whs, titel, xlab, qcrit = NULL, bw = 1) {
+  df <- data.frame(
+    værdi = c(vals_garch, vals_hs, vals_whs),
+    model = rep(c("GARCH", "HS", "WHS"), c(length(vals_garch), length(vals_hs), length(vals_whs))))
+  p <- ggplot(df, aes(x = værdi, fill = model, color = model)) +
+    geom_histogram(position = "identity", alpha = 0.4, binwidth = bw) +
+    scale_color_manual(values = farver_model) + scale_fill_manual(values = farver_model) +
+    labs(title = titel, x = xlab, y = "Antal", color = "Model", fill = "Model") +
+    theme_minimal() +
+    theme(legend.position = "bottom", plot.title = element_text(size = 11, hjust = 0.5),
+          axis.title = element_text(size = 9))
+  if (!is.null(qcrit)) p <- p + geom_vline(xintercept = qcrit + 0.5, linetype = "dashed", linewidth = 0.7)
+  p
+}
+
+# Samlet panel med Z2, VaR, ER, CC1 og CC2. CC2 testes i øvre hale.
+panel_tætheder <- function(d, T_n = T_test) {
+  q_Z2  <- quantile(d$Z2_g, 0.0412, na.rm = TRUE)
+  q_ER  <- quantile(d$ER_g, 0.0412, na.rm = TRUE)
+  q_VaR <- qbinom(1 - 0.0412, T_n, 0.01)
+  q_CC1 <- quantile(d$CC_g[, 1], 0.0412,     na.rm = TRUE)
+  q_CC2 <- quantile(d$CC_g[, 2], 1 - 0.0412, na.rm = TRUE)
+  list(
+    plot_tæthed(d$Z2_g, d$Z2_h, d$Z2_w, "Tæthed af Z2", "Z2", q_Z2, adjust = 2),
+    plot_histogram(d$n_g, d$n_h, d$n_w, "VaR overskridelsestest (α = 1%)", "Antal overskridelser", q_VaR, bw = 1),
+    plot_tæthed(d$ER_g, d$ER_h, d$ER_w, "ER teststørrelse", "ER", q_ER, adjust = 2),
+    plot_tæthed(d$CC_g[, 1], d$CC_h[, 1], d$CC_w[, 1], "CC - 1. komponent", "T2,1", q_CC1, adjust = 3),
+    plot_tæthed(d$CC_g[, 2], d$CC_h[, 2], d$CC_w[, 2], "CC - 2. komponent", "T2,2", q_CC2, adjust = 2))
+}
+
+tegn_panel <- function(d, T_n = T_test, top = NULL) {
+  grid.arrange(grobs = panel_tætheder(d, T_n), nrow = 3, ncol = 2, top = top)
+}
+
+# Tabelformatering
+format_tabel <- function(df, titel) {
+  df_fmt <- data.frame(m = df$m,
+    Z2 = formatC(df$Z2, digits = 3, format = "f"), VaR = formatC(df$VaR, digits = 3, format = "f"),
+    ER = formatC(df$ER, digits = 3, format = "f"), CC  = formatC(df$CC, digits = 3, format = "f"))
+  knitr::kable(df_fmt, align = "r", col.names = c("$m$", "$Z_2$", "VaR", "ER", "CC"), caption = titel)
+}
+```
+
+# Afsnit 6: HS & WHS
+
+## 6.2 Analyse af en simuleret sti
+
+```{r simulering_sti}
+set.seed(2)
+sim <- simulate_garch(n, omega_h, alpha_h, beta_h, nu_h, burn_in)
+X   <- sim$X
+sig <- sim$sigma
+
+VaR_garch <- VaR_GARCH_stdt(sig, alpha, nu_h)
+ES_garch  <- ES_GARCH_stdt( sig, alpha, nu_h)
+hs  <- HS_estimation( X, alpha, w)
+whs <- WHS_estimation(X, alpha, w, v)
+
+idx   <- (w+1):n
+t_seq <- idx
+X_tail         <- X[idx]
+VaR_garch_tail <- VaR_garch[idx]; ES_garch_tail <- ES_garch[idx]
+VaR_hs_tail    <- hs$VaR[idx];    ES_hs_tail    <- hs$ES[idx]
+VaR_whs_tail   <- whs$VaR[idx];   ES_whs_tail   <- whs$ES[idx]
+
+exc_garch <- which(X_tail < -VaR_garch_tail)
+exc_hs    <- which(X_tail < -VaR_hs_tail)
+exc_whs   <- which(X_tail < -VaR_whs_tail)
+```
+
+```{r figur_hs, fig.width=10, fig.height=5, dpi=300}
+farver_hs <- c("X" = "grey50", "ES_GARCH" = "#27408B", "ES_HS" = "darkorange2",
+               "VaR_GARCH" = "#4876FF", "VaR_HS" = "orange")
+
+df_hs <- data.frame(t = t_seq, X = X_tail,
+  ES_GARCH = -ES_garch_tail, ES_HS = -ES_hs_tail,
+  VaR_GARCH = -VaR_garch_tail, VaR_HS = -VaR_hs_tail)
+
+plot_sammenligning(df_hs,
+  data.frame(t = t_seq[exc_garch], y = X_tail[exc_garch]),
+  data.frame(t = t_seq[exc_hs],    y = X_tail[exc_hs]),
+  farver_hs, "GARCH vs. Historisk Simulation", "HS",
+  length(exc_garch), length(exc_hs), length(idx) * alpha)
+```
+
+```{r figur_whs, fig.width=10, fig.height=5, dpi=300}
+farver_whs <- c("X" = "grey50", "ES_GARCH" = "#27408B", "ES_WHS" = "#8B2323",
+                "VaR_GARCH" = "#4876FF", "VaR_WHS" = "#FF4040")
+
+df_whs <- data.frame(t = t_seq, X = X_tail,
+  ES_GARCH = -ES_garch_tail, ES_WHS = -ES_whs_tail,
+  VaR_GARCH = -VaR_garch_tail, VaR_WHS = -VaR_whs_tail)
+
+plot_sammenligning(df_whs,
+  data.frame(t = t_seq[exc_garch], y = X_tail[exc_garch]),
+  data.frame(t = t_seq[exc_whs],   y = X_tail[exc_whs]),
+  farver_whs, "GARCH vs. Vægtet Historisk Simulation", "WHS",
+  length(exc_garch), length(exc_whs), length(idx) * alpha)
+```
+
+## 6.3 Analyse af vindueslængden
+
+```{r figur_vindue, fig.width=10, fig.height=20, dpi=300}
+set.seed(11)
+n_local <- 1250
+X_fig   <- simulate_garch(n_local, omega_h, alpha_h, beta_h, nu_h, burn_in)$X
+
+ES_hs_list <- list(); VaR_hs_list <- list(); ES_whs_list <- list(); VaR_whs_list <- list()
+for (ww in m_seq) {
+  hs_fig  <- HS_estimation( X_fig, alpha, ww)
+  whs_fig <- WHS_estimation(X_fig, alpha, ww, v)
+  ES_hs_list[[as.character(ww)]]   <- hs_fig$ES
+  VaR_hs_list[[as.character(ww)]]  <- hs_fig$VaR
+  ES_whs_list[[as.character(ww)]]  <- whs_fig$ES
+  VaR_whs_list[[as.character(ww)]] <- whs_fig$VaR
+}
+
+idx_fig   <- (max(m_seq)+1):n_local
+farver_m  <- c("X" = "grey50", "m=125" = "#FF4500", "m=250" = "darkorange2",
+               "m=500" = "#FFD700", "m=1000" = "#228B22")
+labels_m  <- c("X" = "X", "m=125" = "Vindueslængde på 125", "m=250" = "Vindueslængde på 250",
+               "m=500" = "Vindueslængde på 500", "m=1000" = "Vindueslængde på 1000")
+
+lav_plot <- function(es_list, titel) {
+  df <- data.frame(t = idx_fig, X = X_fig[idx_fig],
+    `m=125` = -es_list[["125"]][idx_fig], `m=250` = -es_list[["250"]][idx_fig],
+    `m=500` = -es_list[["500"]][idx_fig], `m=1000` = -es_list[["1000"]][idx_fig],
+    check.names = FALSE)
+  df_long <- pivot_longer(df, cols = -t, names_to = "Serie", values_to = "Værdi")
+  ggplot() +
+    geom_line(data = df_long %>% filter(Serie == "X"),
+              aes(x = t, y = Værdi, color = Serie), linewidth = 0.4) +
+    geom_line(data = df_long %>% filter(Serie != "X"),
+              aes(x = t, y = Værdi, color = Serie), linewidth = 0.9) +
+    scale_color_manual(values = farver_m, labels = labels_m, breaks = names(farver_m)) +
+    labs(title = titel, x = "Tid", y = "", color = "") +
+    theme_minimal() + theme(legend.position = "bottom")
+}
+
+grid.arrange(
+  lav_plot(ES_hs_list,   "HS - ES ved varierende vindueslængder"),
+  lav_plot(VaR_hs_list,  "HS - VaR ved varierende vindueslængder"),
+  lav_plot(ES_whs_list,  "WHS - ES ved varierende vindueslængder"),
+  lav_plot(VaR_whs_list, "WHS - VaR ved varierende vindueslængder"),
+  nrow = 4)
+```
+
+```{r analyse, cache=TRUE}
+# Tung Monte Carlo-analyse (M = 10000) for begge regimer. Kør én gang og brug cache.
+res_h <- analyser_regime(omega_h, alpha_h, beta_h, nu_h)
+res_l <- analyser_regime(omega_l, alpha_l, beta_l, nu_l)
+```
+
+```{r tabeller_hoej}
+knitr::kable(res_h$overskr, digits = 2, col.names = c("$m$", "GARCH", "HS", "WHS", "Forventet"),
+  caption = paste0("Gennemsnitligt antal VaR-overskridelser, høj volatilitet | M = ", M,
+                   " | T = ", T_test, " | $\\alpha$ = ", alpha))
+format_tabel(res_h$rater_hs,
+  paste0("Afvisningsrater for HS, høj volatilitet | M = ", M, " | T = ", T_test,
+         " | sign. = 0.0412 | $\\alpha$ = ", alpha))
+format_tabel(res_h$rater_whs,
+  paste0("Afvisningsrater for WHS, høj volatilitet | M = ", M, " | T = ", T_test,
+         " | sign. = 0.0412 | $\\alpha$ = ", alpha))
+```
+
+## 6.4 Tæthedsfunktioner for backtests
+
+```{r tæthed_hoej, fig.width=12, fig.height=10, dpi=300}
+tegn_panel(res_h$dist[["250"]])
+```
+
+# Appendiks B
+
+## B.4 Vægtning i WHS
+
+```{r figur_vaegt, fig.width=10, fig.height=5, dpi=300}
+farver_vaegt <- c("125" = "#FF4500", "250" = "darkorange2", "500" = "#FFD700", "1000" = "#228B22")
+
+df_vaegt <- data.frame()
+for (ww in m_seq) {
+  tau <- 1:ww
+  df_vaegt <- rbind(df_vaegt, data.frame(
+    tau = tau, v_tau = (1 - v) * v^(tau - 1) / (1 - v^ww), m = as.character(ww)))
+}
+df_vaegt$m <- factor(df_vaegt$m, levels = as.character(m_seq))
+
+labels_v <- c("125" = expression(m == 125), "250" = expression(m == 250),
+              "500" = expression(m == 500), "1000" = expression(m == 1000))
+
+ggplot(df_vaegt, aes(x = tau, y = v_tau, color = m, linetype = m)) +
+  geom_line(linewidth = 0.9) +
+  scale_color_manual(values = farver_vaegt, labels = labels_v) +
+  scale_linetype_manual(values = c("125" = "solid", "250" = "solid",
+                                   "500" = "solid", "1000" = "dashed"), labels = labels_v) +
+  labs(title = bquote("Vægte " ~ v[tau] ~ " ved varierende vindueslængde, " ~ eta == .(v)),
+       x = expression(tau), y = expression(v[tau]), color = "", linetype = "") +
+  theme_minimal() + theme(legend.position = "bottom", plot.title = element_text(hjust = 0.5))
+```
+
+## B.5 Robustheds-tjek af HS og WHS under lav volatilitet
+
+```{r tabeller_lav}
+knitr::kable(res_l$overskr, digits = 2, col.names = c("$m$", "GARCH", "HS", "WHS", "Forventet"),
+  caption = paste0("Gennemsnitligt antal VaR-overskridelser, lav volatilitet | M = ", M,
+                   " | T = ", T_test, " | $\\alpha$ = ", alpha))
+format_tabel(res_l$rater_hs,
+  paste0("Afvisningsrater for HS, lav volatilitet | M = ", M, " | T = ", T_test,
+         " | sign. = 0.0412 | $\\alpha$ = ", alpha))
+format_tabel(res_l$rater_whs,
+  paste0("Afvisningsrater for WHS, lav volatilitet | M = ", M, " | T = ", T_test,
+         " | sign. = 0.0412 | $\\alpha$ = ", alpha))
+```
+
+```{r tæthed_lav, fig.width=12, fig.height=10, dpi=300}
+tegn_panel(res_l$dist[["250"]])
+```
+
+## B.6 Tæthedernes følsomhed overfor vindueslængde under høj volatilitet
+
+```{r tæthed_hoej_appendiks, fig.width=12, fig.height=10, dpi=300}
+for (m in c(125, 500, 1000)) {
+  tegn_panel(res_h$dist[[as.character(m)]], top = paste("Høj volatilitet — m =", m))
+}
+```
+
+## B.7 ES-estimater betinget på egen og sand VaR
+
+```{r tabel_es_betinget}
+est <- res_h$est250
+
+# Gennemsnitlig estimeret ES på de dage hvor VaR overskrides (indeksering, ikke vægtning)
+ES_betinget <- function(ES_est, X_obs, VaR_ref) mean(ES_est[X_obs < -VaR_ref], na.rm = TRUE)
+
+tabel_b7 <- data.frame(
+  Beregningsmetode = c("Parametrisk (GARCH)", "Ikke-parametrisk (HS)", "Ikke-parametrisk (WHS)"),
+  `VaR frekvens` = c(mean(VaR_stat(est$X_t, est$VaR_g)),
+                     mean(VaR_stat(est$X_t, est$VaR_h)),
+                     mean(VaR_stat(est$X_t, est$VaR_w))),
+  `Gns. est. ES | Egen VaR` = c(ES_betinget(est$ES_g, est$X_t, est$VaR_g),
+                                ES_betinget(est$ES_h, est$X_t, est$VaR_h),
+                                ES_betinget(est$ES_w, est$X_t, est$VaR_w)),
+  `Gns. est. ES | GARCH VaR` = c(ES_betinget(est$ES_g, est$X_t, est$VaR_g),
+                                 ES_betinget(est$ES_h, est$X_t, est$VaR_g),
+                                 ES_betinget(est$ES_w, est$X_t, est$VaR_g)),
+  check.names = FALSE)
+
+knitr::kable(tabel_b7, digits = 2,
+  caption = paste0("ES-estimater betinget på egen og sand VaR | M = ", M, " | T = ", T_test,
+                   " | m = 250 | $\\alpha$ = ", alpha, " | $\\eta$ = ", v))
+```
