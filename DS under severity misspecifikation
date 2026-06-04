@@ -24,9 +24,7 @@ H1_seq <- 3:9
 ```
 
 ```{r}
-# ER og CC under i.i.d. (konstant VaR og ES) - tilpasset fra GARCH-versionerne i kapitel 5
-
-# ER, McNeil-Frey, med konstant sigma under i.i.d. (ubetinget volatilitet)
+# ER med konstant sigma under i.i.d. (ubetinget vol)
 ER_iid <- function(X, VaR_val, ES_val, sigma_val) {
   I <- (X + VaR_val) < 0
   r <- ((X + ES_val) * I) / sigma_val
@@ -34,7 +32,7 @@ ER_iid <- function(X, VaR_val, ES_val, sigma_val) {
   rbar[!is.finite(rbar)] <- NA
   rbar}
 
-# CC, Nolde-Ziegel, konstant risikomål
+# CC konstant risikomål
 CC_iid <- function(X, VaR_val, ES_val, alpha) {
   M <- nrow(X); T <- ncol(X)
   T_CC <- matrix(0, M, 2)
@@ -60,7 +58,7 @@ CC_power <- function(T_CC_null, T_CC) {
 ```
 
 ```{r DS_helpers}
-# (d_i, H_i) udledes fra afkastserie under H_0-prædiktion (t_10)
+# (d_i, H_i) udledes fra afkastserie under H_0 (t_10)
 afkast_til_dH <- function(X_row, VaR_val, nu_pred) {
   I <- X_row + VaR_val < 0
   if (sum(I) < 2) return(list(d = integer(0), H = numeric(0)))
@@ -78,17 +76,15 @@ DS_pvalues_matrix <- function(X, VaR_val, nu_pred, alpha, K_uni, K_biv) {
     dH <- afkast_til_dH(X[i, ], VaR_val, nu_pred)
     if (length(dH$d) >= 2) {
       DS[i, ] <- ds_test_di_Hi(dH$d, dH$H, alpha, K_uni, K_biv)
-    }
-  }
+    }}
   DS}
 ```
 
 ```{r kalibrering_H0}
-# H_0: X_t ~ t_10 (uskaleret), ER- og CC-kalibrering plus DS-kritiske værdier
-# Genbruger den eksisterende X_t_10-matrix hvis tilgængelig
+# H_0: X_t ~ t_10, ER og CC, DS-kritiske værdier
 X_H0 <- matrix(rt(T * M0, df = nu_H0), nrow = M0, ncol = T)
 
-# Ubetinget volatilitet for t_10 (uskaleret): sqrt(nu/(nu-2))
+# Ubetinget vol for t_10
 sigma_H0 <- sqrt(nu_H0 / (nu_H0 - 2))
 
 ER_H0 <- ER_iid(X_H0, VaR_nu_10, ES_nu_10, sigma_H0)
@@ -102,7 +98,7 @@ q_DS_global <- quantile(DS_H0[, "global"], signifikansniveau, na.rm = TRUE)
 ```
 
 ```{r styrke_matrix}
-# Power matrix: 7 tests × 7 nu-værdier
+# Power matrix
 power_matrix_7_3 <- matrix(NA, nrow = length(H1_seq), ncol = 8)
 colnames(power_matrix_7_3) <- c("VaR", "Z2", "Z3", "ER", "CC", "T_F", "T_S", "T_G")
 rownames(power_matrix_7_3) <- paste0("df = ", H1_seq)
@@ -181,15 +177,15 @@ axis(2,
 
 # Klassiske tests
 lines(H1_seq, power_matrix_7_3[, "VaR"], col = "darkgoldenrod2", lwd = 3)
-lines(H1_seq, power_matrix_7_3[, "Z2"],  col = "cornflowerblue", lwd = 3)
-lines(H1_seq, power_matrix_7_3[, "Z3"],  col = "deeppink3",      lwd = 3)
-lines(H1_seq, power_matrix_7_3[, "ER"],  col = "aquamarine2",         lwd = 3)
-lines(H1_seq, power_matrix_7_3[, "CC"],  col = "darkgreen",      lwd = 3)
+lines(H1_seq, power_matrix_7_3[, "Z2"], col = "cornflowerblue", lwd = 3)
+lines(H1_seq, power_matrix_7_3[, "Z3"], col = "deeppink3", lwd = 3)
+lines(H1_seq, power_matrix_7_3[, "ER"], col = "aquamarine2", lwd = 3)
+lines(H1_seq, power_matrix_7_3[, "CC"], col = "darkgreen", lwd = 3)
 
-# DS-komponenter (stiplede)
+# DS-komponenter 
 lines(H1_seq, power_matrix_7_3[, "T_F"], col = "deeppink", lwd = 3, lty = 2)
-lines(H1_seq, power_matrix_7_3[, "T_S"], col = "darkcyan",  lwd = 3, lty = 2)
-lines(H1_seq, power_matrix_7_3[, "T_G"],  col = "grey20",    lwd = 3, lty = 2)
+lines(H1_seq, power_matrix_7_3[, "T_S"], col = "darkcyan", lwd = 3, lty = 2)
+lines(H1_seq, power_matrix_7_3[, "T_G"], col = "grey20", lwd = 3, lty = 2)
 
 abline(h = signifikansniveau, col = "grey40", lwd = 2, lty = 3)
 
