@@ -4,7 +4,7 @@ output: html_document
 date: "2026-05-25"
 ---
 
-```{r setup, include=FALSE}
+```{r, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
 library(quantmod)
 library(rugarch)
@@ -14,14 +14,14 @@ library(tidyr)
 ```
 
 ```{r parametre}
-alpha             <- 0.025
-alpha_VaRtest     <- 0.01
+alpha <- 0.025
+alpha_VaRtest <- 0.01
 signifikansniveau <- 0.0412
-M0_crit           <- 100000
-M_power           <- 10000
-burn_in_MC        <- 500
-K_uni             <- 4
-K_biv             <- 3
+M0_crit <- 100000
+M_power <- 10000
+burn_in_MC <- 500
+K_uni <- 4
+K_biv <- 3
 
 cases <- list(
   C25 = list(ticker = "^OMXC25", navn = "C25",
@@ -31,7 +31,7 @@ cases <- list(
 )
 ```
 
-```{r ds_polynomier}
+```{r}
 # Shiftede Meixner-polynomier, ortonormale mht. Geom(alpha)
 meixner_poly <- function(j, x, alpha) {
   x <- as.numeric(x)
@@ -62,7 +62,7 @@ legendre_poly <- function(j, y) {
   sqrt(2*j + 1) * Qm
 }
 
-# DS-teststørrelser (rå) for ét sæt (d_i, H_i): frekvens, severity og global
+# DS-teststørrelser (rå) for sættet (d_i, H_i)
 ds_test_di_Hi <- function(d, H, alpha, K_uni = 4, K_biv = 3) {
   n <- length(d)
   if (n < 2) return(c(T_F = NA, T_S = NA, T_G = NA))
@@ -73,8 +73,8 @@ ds_test_di_Hi <- function(d, H, alpha, K_uni = 4, K_biv = 3) {
   for (k in 1:(K_biv - 1)) for (j in 1:(K_biv - k)) {
     cross <- c(cross,
       mean(meixner_poly(k, d_i, alpha) * meixner_poly(j, d_ip, alpha)),
-      mean(legendre_poly(k, H_ip)      * legendre_poly(j, H_i)),
-      mean(meixner_poly(k, d, alpha)   * legendre_poly(j, H)),
+      mean(legendre_poly(k, H_ip) * legendre_poly(j, H_i)),
+      mean(meixner_poly(k, d, alpha) * legendre_poly(j, H)),
       mean(meixner_poly(k, d_ip, alpha) * legendre_poly(j, H_i)))
   }
   global <- c(Qs, Ps, cross)
@@ -82,24 +82,24 @@ ds_test_di_Hi <- function(d, H, alpha, K_uni = 4, K_biv = 3) {
 }
 ```
 
-```{r teststoerrelser}
+```{r}
 # GARCH(1,1) simulation, M stier
 simulate_garch <- function(T_sti, omega, alpha1, beta1, nu, burn_in, M) {
   total <- T_sti + burn_in
-  tau   <- sqrt((nu - 2) / nu)
-  X    <- matrix(0, M, total)
+  tau <- sqrt((nu - 2) / nu)
+  X <- matrix(0, M, total)
   sig2 <- matrix(0, M, total)
   sig2[, 1] <- omega / (1 - alpha1 - beta1)
   for (t in 2:total) {
-    z         <- rt(M, df = nu) * tau
-    X[, t-1]  <- sqrt(sig2[, t-1]) * z
+    z <- rt(M, df = nu) * tau
+    X[, t-1] <- sqrt(sig2[, t-1]) * z
     sig2[, t] <- omega + alpha1 * X[, t-1]^2 + beta1 * sig2[, t-1]
   }
-  list(X     = X[, (burn_in+1):(burn_in+T_sti), drop = FALSE],
+  list(X = X[, (burn_in+1):(burn_in+T_sti), drop = FALSE],
        sigma = sqrt(sig2[, (burn_in+1):(burn_in+T_sti), drop = FALSE]))
 }
 
-# Filtrér sigma fra givne afkast under faste parametre
+# Filtrerer sigma fra afkast under faste parametre
 simulate_sigma_from_X <- function(X, omega, alpha1, beta1) {
   M <- nrow(X); T_sti <- ncol(X)
   sig2 <- matrix(0, M, T_sti)
@@ -108,7 +108,7 @@ simulate_sigma_from_X <- function(X, omega, alpha1, beta1) {
   sqrt(sig2)
 }
 
-# Parametrisk VaR og ES under standardiseret t
+# VaR og ES under standardiseret t
 VaR_GARCH_stdt <- function(sigma, alpha, nu) -sigma * qt(alpha, nu) * sqrt((nu - 2) / nu)
 
 ES_GARCH_stdt <- function(sigma, alpha, nu) {
@@ -134,8 +134,8 @@ Z3_test_GARCH <- function(X, sigma, alpha, nu) {
 }
 
 ER_test_GARCH <- function(X, ES, VaR, sigma) {
-  I    <- (X + VaR < 0)
-  r    <- ((X + ES) * I) / sigma
+  I <- (X + VaR < 0)
+  r <- ((X + ES) * I) / sigma
   rbar <- rowSums(r) / rowSums(I)
   rbar[!is.finite(rbar)] <- NA
   rbar
@@ -145,10 +145,10 @@ VaR_stat_GARCH <- function(X, VaR) rowSums(X + VaR < 0)
 
 # CC-teststørrelse, M stier. Returnerer M x 2 (frekvens, severity).
 cc_stat <- function(X, VaR, ES, alpha) {
-  Tn  <- ncol(X)
+  Tn <- ncol(X)
   ind <- (X + VaR < 0) * 1
-  V1  <- alpha - ind
-  V2  <- VaR - ES - (1/alpha) * ind * (VaR + X)
+  V1 <- alpha - ind
+  V2 <- VaR - ES - (1/alpha) * ind * (VaR + X)
   cbind(sqrt(Tn) * rowMeans(V1) / sqrt(rowMeans(V1^2)),
         sqrt(Tn) * rowMeans(V2) / sqrt(rowMeans(V2^2)))
 }
@@ -160,7 +160,7 @@ cc_pvalue <- function(CC_null, CC) {
   pmin(2 * pmin(p1, p2), 1)
 }
 
-# Udtræk durations d_i og severities H_i fra én sti
+# Udtræk durations d_i og severities H_i fra en sti
 ds_di_Hi <- function(X, sigma, VaR, alpha, nu) {
   tau <- sqrt((nu - 2) / nu)
   idx <- which(X < -VaR)
@@ -180,8 +180,8 @@ ds_stat_matrix <- function(X, sigma, VaR, alpha, nu) {
 }
 ```
 
-```{r datafunktioner}
-# Daglige log-afkast i procent (×100 for numerisk stabilitet i GARCH-fittet)
+```{r}
+# Daglige log-afkast i procent
 hent_afkast <- function(ticker, start, end) {
   px <- na.omit(Ad(getSymbols(ticker, from = start, to = end, auto.assign = FALSE, src = "yahoo")))
   data.frame(date = index(px)[-1], afkast = diff(log(as.numeric(px))) * 100)
@@ -189,8 +189,8 @@ hent_afkast <- function(ticker, start, end) {
 
 fit_garch <- function(X) {
   spec <- ugarchspec(
-    variance.model     = list(model = "sGARCH", garchOrder = c(1, 1)),
-    mean.model         = list(armaOrder = c(0, 0), include.mean = FALSE),
+    variance.model = list(model = "sGARCH", garchOrder = c(1, 1)),
+    mean.model = list(armaOrder = c(0, 0), include.mean = FALSE),
     distribution.model = "std")
   par <- coef(ugarchfit(spec, data = X, solver = "hybrid",
                         fit.control = list(stationarity = 1)))
@@ -200,8 +200,8 @@ fit_garch <- function(X) {
 
 filter_sigma <- function(X, par) {
   spec <- ugarchspec(
-    variance.model     = list(model = "sGARCH", garchOrder = c(1, 1)),
-    mean.model         = list(armaOrder = c(0, 0), include.mean = FALSE),
+    variance.model = list(model = "sGARCH", garchOrder = c(1, 1)),
+    mean.model = list(armaOrder = c(0, 0), include.mean = FALSE),
     distribution.model = "std",
     fixed.pars = list(omega = par$omega, alpha1 = par$alpha, beta1 = par$beta, shape = par$nu))
   as.numeric(sigma(ugarchfilter(spec, data = X)))
@@ -212,15 +212,15 @@ filter_sigma <- function(X, par) {
 # Fuld analyse for ét aktiv: observerede teststørrelser, kritiske værdier (H0) og styrke (fri nu)
 analyser_case <- function(case) {
   data  <- hent_afkast(case$ticker, case$start, case$end)
-  X     <- data$afkast
+  X <- data$afkast
   dates <- data$date
-  n     <- length(X)
-  oos   <- min(which(dates >= as.Date(case$split)))
+  n <- length(X)
+  oos <- min(which(dates >= as.Date(case$split)))
   oos_idx <- oos:n
 
-  is_fit  <- fit_garch(X[1:(oos - 1)])
+  is_fit <- fit_garch(X[1:(oos - 1)])
   oos_fit <- fit_garch(X[oos:n])
-  nu  <- is_fit$nu
+  nu <- is_fit$nu
   tau <- sqrt((nu - 2) / nu)
 
   # Prædiktiv volatilitet fra IS-fittet, OOS-vinduet
@@ -228,56 +228,56 @@ analyser_case <- function(case) {
   X_oos <- X[oos_idx]
   n_oos <- length(oos_idx)
 
-  X_mat   <- matrix(X_oos, nrow = 1)
+  X_mat <- matrix(X_oos, nrow = 1)
   sig_mat <- matrix(sigma, nrow = 1)
-  VaR     <- VaR_GARCH_stdt(sig_mat, alpha, nu)
-  VaR_1   <- VaR_GARCH_stdt(sig_mat, alpha_VaRtest, nu)
-  ES      <- ES_GARCH_stdt(sig_mat, alpha, nu)
+  VaR <- VaR_GARCH_stdt(sig_mat, alpha, nu)
+  VaR_1 <- VaR_GARCH_stdt(sig_mat, alpha_VaRtest, nu)
+  ES <- ES_GARCH_stdt(sig_mat, alpha, nu)
 
   dH_obs <- ds_di_Hi(X_oos, sigma, as.numeric(VaR), alpha, nu)
   ds_obs <- ds_test_di_Hi(dH_obs$d, dH_obs$H, alpha, K_uni, K_biv)
 
   # H0-kalibrering via IS-fittet GARCH
-  sim0  <- simulate_garch(n_oos, is_fit$omega, is_fit$alpha, is_fit$beta, nu, burn_in_MC, M0_crit)
-  VaR0  <- VaR_GARCH_stdt(sim0$sigma, alpha, nu)
+  sim0 <- simulate_garch(n_oos, is_fit$omega, is_fit$alpha, is_fit$beta, nu, burn_in_MC, M0_crit)
+  VaR0 <- VaR_GARCH_stdt(sim0$sigma, alpha, nu)
   VaR0_1 <- VaR_GARCH_stdt(sim0$sigma, alpha_VaRtest, nu)
-  ES0   <- ES_GARCH_stdt(sim0$sigma, alpha, nu)
-  CC0   <- cc_stat(sim0$X, VaR0, ES0, alpha)
-  ds0   <- ds_stat_matrix(sim0$X, sim0$sigma, VaR0, alpha, nu)
+  ES0 <- ES_GARCH_stdt(sim0$sigma, alpha, nu)
+  CC0 <- cc_stat(sim0$X, VaR0, ES0, alpha)
+  ds0 <- ds_stat_matrix(sim0$X, sim0$sigma, VaR0, alpha, nu)
 
   crit <- list(
     VaR = quantile(VaR_stat_GARCH(sim0$X, VaR0_1), 1 - signifikansniveau, na.rm = TRUE),
-    Z2  = quantile(Z2_test_GARCH(sim0$X, VaR0, ES0, alpha), signifikansniveau, na.rm = TRUE),
-    Z3  = quantile(Z3_test_GARCH(sim0$X, sim0$sigma, alpha, nu), signifikansniveau, na.rm = TRUE),
-    ER  = quantile(ER_test_GARCH(sim0$X, ES0, VaR0, sim0$sigma), signifikansniveau, na.rm = TRUE),
-    CC  = signifikansniveau,
+    Z2 = quantile(Z2_test_GARCH(sim0$X, VaR0, ES0, alpha), signifikansniveau, na.rm = TRUE),
+    Z3 = quantile(Z3_test_GARCH(sim0$X, sim0$sigma, alpha, nu), signifikansniveau, na.rm = TRUE),
+    ER = quantile(ER_test_GARCH(sim0$X, ES0, VaR0, sim0$sigma), signifikansniveau, na.rm = TRUE),
+    CC = signifikansniveau,
     T_F = quantile(ds0[, "T_F"], 1 - signifikansniveau, na.rm = TRUE),
     T_S = quantile(ds0[, "T_S"], 1 - signifikansniveau, na.rm = TRUE),
     T_G = quantile(ds0[, "T_G"], 1 - signifikansniveau, na.rm = TRUE))
 
   obs <- c(
     VaR = unname(VaR_stat_GARCH(X_mat, VaR_1)),
-    Z2  = unname(Z2_test_GARCH(X_mat, VaR, ES, alpha)),
-    Z3  = unname(Z3_test_GARCH(X_mat, sig_mat, alpha, nu)),
-    ER  = unname(ER_test_GARCH(X_mat, ES, VaR, sig_mat)),
-    CC  = unname(cc_pvalue(CC0, cc_stat(X_mat, VaR, ES, alpha))),
+    Z2 = unname(Z2_test_GARCH(X_mat, VaR, ES, alpha)),
+    Z3 = unname(Z3_test_GARCH(X_mat, sig_mat, alpha, nu)),
+    ER = unname(ER_test_GARCH(X_mat, ES, VaR, sig_mat)),
+    CC = unname(cc_pvalue(CC0, cc_stat(X_mat, VaR, ES, alpha))),
     T_F = unname(ds_obs["T_F"]), T_S = unname(ds_obs["T_S"]), T_G = unname(ds_obs["T_G"]))
 
   # H1 = fuldt OOS-fit (fri nu); modellen bruger IS-dynamik og IS-nu
-  sim1  <- simulate_garch(n_oos, oos_fit$omega, oos_fit$alpha, oos_fit$beta, oos_fit$nu, burn_in_MC, M_power)
-  sig1  <- simulate_sigma_from_X(sim1$X, is_fit$omega, is_fit$alpha, is_fit$beta)
-  VaR1  <- VaR_GARCH_stdt(sig1, alpha, nu)
+  sim1 <- simulate_garch(n_oos, oos_fit$omega, oos_fit$alpha, oos_fit$beta, oos_fit$nu, burn_in_MC, M_power)
+  sig1 <- simulate_sigma_from_X(sim1$X, is_fit$omega, is_fit$alpha, is_fit$beta)
+  VaR1 <- VaR_GARCH_stdt(sig1, alpha, nu)
   VaR1_1 <- VaR_GARCH_stdt(sig1, alpha_VaRtest, nu)
-  ES1   <- ES_GARCH_stdt(sig1, alpha, nu)
-  CC1   <- cc_stat(sim1$X, VaR1, ES1, alpha)
-  ds1   <- ds_stat_matrix(sim1$X, sig1, VaR1, alpha, nu)
+  ES1 <- ES_GARCH_stdt(sig1, alpha, nu)
+  CC1 <- cc_stat(sim1$X, VaR1, ES1, alpha)
+  ds1 <- ds_stat_matrix(sim1$X, sig1, VaR1, alpha, nu)
 
   power <- list(
     VaR = mean(VaR_stat_GARCH(sim1$X, VaR1_1) > crit$VaR, na.rm = TRUE),
-    Z2  = mean(Z2_test_GARCH(sim1$X, VaR1, ES1, alpha) < crit$Z2, na.rm = TRUE),
-    Z3  = mean(Z3_test_GARCH(sim1$X, sig1, alpha, nu) < crit$Z3, na.rm = TRUE),
-    ER  = mean(ER_test_GARCH(sim1$X, ES1, VaR1, sig1) < crit$ER, na.rm = TRUE),
-    CC  = mean(cc_pvalue(CC0, CC1) < signifikansniveau, na.rm = TRUE),
+    Z2 = mean(Z2_test_GARCH(sim1$X, VaR1, ES1, alpha) < crit$Z2, na.rm = TRUE),
+    Z3 = mean(Z3_test_GARCH(sim1$X, sig1, alpha, nu) < crit$Z3, na.rm = TRUE),
+    ER = mean(ER_test_GARCH(sim1$X, ES1, VaR1, sig1) < crit$ER, na.rm = TRUE),
+    CC = mean(cc_pvalue(CC0, CC1) < signifikansniveau, na.rm = TRUE),
     T_F = mean(ds1[, "T_F"] > crit$T_F, na.rm = TRUE),
     T_S = mean(ds1[, "T_S"] > crit$T_S, na.rm = TRUE),
     T_G = mean(ds1[, "T_G"] > crit$T_G, na.rm = TRUE))
@@ -316,15 +316,15 @@ for (r in res) cat(r$case$navn, ": sigma_OOS/sigma_IS = ", round(r$sd_ratio, 2),
 
 ## Tabel: Observerede teststørrelser
 
-```{r tabel_observeret, results='asis'}
+```{r, results='asis'}
 obs_tabel <- function(r) {
   o <- r$obs; cv <- r$crit
   retning <- c(VaR = 1, Z2 = -1, Z3 = -1, ER = -1, CC = -1, T_F = 1, T_S = 1, T_G = 1)
-  navne   <- c("VaR_{1%}", "Z2", "Z3", "ER", "CC", "T_F", "T_S", "T_G")
-  keys    <- c("VaR", "Z2", "Z3", "ER", "CC", "T_F", "T_S", "T_G")
-  vaerdi  <- o[keys]
+  navne <- c("VaR_{1%}", "Z2", "Z3", "ER", "CC", "T_F", "T_S", "T_G")
+  keys <- c("VaR", "Z2", "Z3", "ER", "CC", "T_F", "T_S", "T_G")
+  vaerdi <- o[keys]
   kritisk <- c(cv$VaR, cv$Z2, cv$Z3, cv$ER, cv$CC, cv$T_F, cv$T_S, cv$T_G)
-  afvis   <- ifelse(retning > 0, vaerdi > kritisk, vaerdi < kritisk)
+  afvis <- ifelse(retning > 0, vaerdi > kritisk, vaerdi < kritisk)
   data.frame(Test = navne, Observeret = round(vaerdi, 3), Kritisk = round(kritisk, 3),
              Afvises = ifelse(afvis, "Ja", "Nej"), check.names = FALSE)
 }
@@ -340,16 +340,16 @@ for (r in res) {
 
 ## Figur: fordeling af d_i og H_i
 
-```{r figur_dH, fig.width=12, fig.height=8, dpi=300}
+```{r, fig.width=12, fig.height=8, dpi=300}
 set.seed(2026)
 N_ref <- 5000
 d_ref <- rgeom(N_ref, alpha) + 1L
 H_ref <- runif(N_ref)
-col_H0  <- "darkcyan"
+col_H0 <- "darkcyan"
 col_obs <- "deeppink3"
 
 plot_d <- function(d_obs, navn, xmax = 100) {
-  bins  <- seq(0, max(d_ref, d_obs) + 5, by = 5)
+  bins <- seq(0, max(d_ref, d_obs) + 5, by = 5)
   h_ref <- hist(d_ref, breaks = bins, plot = FALSE)
   h_obs <- hist(d_obs, breaks = bins, plot = FALSE)
   plot(h_ref, freq = FALSE, col = adjustcolor(col_H0, 0.5), border = col_H0,
@@ -363,7 +363,7 @@ plot_d <- function(d_obs, navn, xmax = 100) {
 }
 
 plot_H <- function(H_obs, navn) {
-  bins  <- seq(0, 1, by = 0.1)
+  bins <- seq(0, 1, by = 0.1)
   h_ref <- hist(H_ref, breaks = bins, plot = FALSE)
   h_obs <- hist(H_obs, breaks = bins, plot = FALSE)
   plot(h_ref, freq = FALSE, col = adjustcolor(col_H0, 0.5), border = col_H0,
@@ -377,7 +377,7 @@ plot_H <- function(H_obs, navn) {
 }
 
 par(mfrow = c(2, 2), mar = c(4.5, 4.5, 2.5, 1))
-plot_d(res$C25$dH$d,    "C25");         plot_H(res$C25$dH$H,    "C25")
+plot_d(res$C25$dH$d, "C25"); plot_H(res$C25$dH$H, "C25")
 plot_d(res$Danske$dH$d, "Danske Bank"); plot_H(res$Danske$dH$H, "Danske Bank")
 par(mfrow = c(1, 1))
 ```
