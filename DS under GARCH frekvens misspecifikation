@@ -23,7 +23,7 @@ ds_di_Hi <- function(X, sigma, VaR, alpha, nu) {
 
     list(d = d, H = H)})}
 
-# ds_test_di_Hi anvendes fra tidligere kode i vores environment 
+# vi bruger ds_test_di_Hi igen
 ds_pv <- function(dH, alpha) {
   t(sapply(dH, function(x) {
     if (length(x$d) < 2) c(global = NA, freq = NA, sev = NA)
@@ -31,7 +31,7 @@ ds_pv <- function(dH, alpha) {
 ```
 
 ```{r}
-# Empiriske kritiske værdier under H0, lav volatilitet
+# Empiriske kritiske værdier under H0, lav vol
 DS_H0_low <- ds_pv(ds_di_Hi(
   sim_H0_low$X, sim_H0_low$sigma, VaR_H0_low, alpha, nu_l), alpha)
 
@@ -41,7 +41,7 @@ q_DS_global_low <- quantile(DS_H0_low[, "global"], 0.0412, na.rm = TRUE)
 ```
 
 ```{r}
-# Case 2a: misspecifikation af persistens med fast omega (lav volatilitet)
+# Case 2a: misspecifikation af persistens med fast omega (lav vol)
 persist_l <- alpha_l + beta_l
 persist_seq <- seq(0.75, 0.99, length.out = 25)
 
@@ -134,7 +134,7 @@ legend("left",
 ```
 
 ```{r}
-# Case 2b: misspecifikation af persistens med fast ubetinget varians, lav volatilitet
+# Case 2b: misspecifikation af persistens med fast ubetinget varians, lav vol
 sigma2_bar_l <- omega_l / (1 - alpha_l - beta_l)
 omega_alt_vec_l_2b <- sigma2_bar_l * (1 - (alpha_alt_vec_l + beta_alt_vec_l))
 
